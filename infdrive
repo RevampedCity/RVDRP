@@ -1,0 +1,329 @@
+local Players = game:GetService("Players")
+local RunService = game:GetService("RunService")
+local UserInputService = game:GetService("UserInputService")
+local VirtualUser = game:GetService("VirtualUser")
+
+local LocalPlayer = Players.LocalPlayer
+
+-- POINTS
+local startPosition = Vector3.new(-19125, 1276, 14726)
+local endPosition = Vector3.new(709, 868, -6331)
+
+-- SETTINGS
+local driveSpeed = 220
+local minSpeed = 80
+local maxSpeed = 880
+local resetDistance = 80
+local enabled = false
+
+local driveConnection
+local currentVelocity
+local currentAttachment
+local antiAfkConnection
+
+-- GUI
+local gui = Instance.new("ScreenGui")
+gui.Name = "SmoothCarDriveGui"
+gui.ResetOnSpawn = false
+gui.Parent = LocalPlayer:WaitForChild("PlayerGui")
+
+local frame = Instance.new("Frame")
+frame.Size = UDim2.new(0, 230, 0, 130)
+frame.Position = UDim2.new(0, 20, 0, 200)
+frame.BackgroundColor3 = Color3.fromRGB(35, 35, 35)
+frame.BorderSizePixel = 0
+frame.Parent = gui
+
+local corner = Instance.new("UICorner")
+corner.CornerRadius = UDim.new(0, 10)
+corner.Parent = frame
+
+local title = Instance.new("TextLabel")
+title.Size = UDim2.new(1, -20, 0, 28)
+title.Position = UDim2.new(0, 10, 0, 8)
+title.BackgroundTransparency = 1
+title.Text = "Car Drive Loop"
+title.TextColor3 = Color3.fromRGB(240, 240, 240)
+title.TextScaled = true
+title.Font = Enum.Font.GothamBold
+title.Parent = frame
+
+local button = Instance.new("TextButton")
+button.Size = UDim2.new(1, -20, 0, 34)
+button.Position = UDim2.new(0, 10, 0, 42)
+button.Text = "OFF"
+button.TextScaled = true
+button.Font = Enum.Font.GothamBold
+button.BackgroundColor3 = Color3.fromRGB(120, 45, 45)
+button.TextColor3 = Color3.fromRGB(255, 255, 255)
+button.BorderSizePixel = 0
+button.Parent = frame
+
+local buttonCorner = Instance.new("UICorner")
+buttonCorner.CornerRadius = UDim.new(0, 8)
+buttonCorner.Parent = button
+
+local speedLabel = Instance.new("TextLabel")
+speedLabel.Size = UDim2.new(1, -20, 0, 20)
+speedLabel.Position = UDim2.new(0, 10, 0, 82)
+speedLabel.BackgroundTransparency = 1
+speedLabel.Text = "Speed: " .. tostring(driveSpeed)
+speedLabel.TextColor3 = Color3.fromRGB(210, 210, 210)
+speedLabel.TextScaled = true
+speedLabel.Font = Enum.Font.Gotham
+speedLabel.Parent = frame
+
+local sliderBack = Instance.new("Frame")
+sliderBack.Size = UDim2.new(1, -20, 0, 8)
+sliderBack.Position = UDim2.new(0, 10, 0, 110)
+sliderBack.BackgroundColor3 = Color3.fromRGB(65, 65, 65)
+sliderBack.BorderSizePixel = 0
+sliderBack.Parent = frame
+
+local sliderBackCorner = Instance.new("UICorner")
+sliderBackCorner.CornerRadius = UDim.new(1, 0)
+sliderBackCorner.Parent = sliderBack
+
+local sliderFill = Instance.new("Frame")
+sliderFill.Size = UDim2.new((driveSpeed - minSpeed) / (maxSpeed - minSpeed), 0, 1, 0)
+sliderFill.BackgroundColor3 = Color3.fromRGB(120, 120, 120)
+sliderFill.BorderSizePixel = 0
+sliderFill.Parent = sliderBack
+
+local sliderFillCorner = Instance.new("UICorner")
+sliderFillCorner.CornerRadius = UDim.new(1, 0)
+sliderFillCorner.Parent = sliderFill
+
+local knob = Instance.new("Frame")
+knob.Size = UDim2.new(0, 14, 0, 14)
+knob.Position = UDim2.new((driveSpeed - minSpeed) / (maxSpeed - minSpeed), -7, 0.5, -7)
+knob.BackgroundColor3 = Color3.fromRGB(230, 230, 230)
+knob.BorderSizePixel = 0
+knob.Parent = sliderBack
+
+local knobCorner = Instance.new("UICorner")
+knobCorner.CornerRadius = UDim.new(1, 0)
+knobCorner.Parent = knob
+
+-- HELPERS
+local function getVehicleSeat()
+    local char = LocalPlayer.Character
+    if not char then return nil end
+
+    local humanoid = char:FindFirstChildWhichIsA("Humanoid")
+    if not humanoid then return nil end
+
+    local seat = humanoid.SeatPart
+    if seat and seat:IsA("VehicleSeat") then
+        return seat
+    end
+
+    return nil
+end
+
+local function getCar()
+    local seat = getVehicleSeat()
+    if not seat then
+        warn("Get in a car first.")
+        return nil, nil
+    end
+
+    local car = seat:FindFirstAncestorOfClass("Model")
+    if not car then
+        warn("Could not find car model.")
+        return nil, nil
+    end
+
+    return car, seat
+end
+
+local function stopCar(car)
+    for _, part in ipairs(car:GetDescendants()) do
+        if part:IsA("BasePart") then
+            part.AssemblyLinearVelocity = Vector3.zero
+            part.AssemblyAngularVelocity = Vector3.zero
+        end
+    end
+end
+
+local function cleanupDrive()
+    if driveConnection then
+        driveConnection:Disconnect()
+        driveConnection = nil
+    end
+
+    if currentVelocity then
+        currentVelocity:Destroy()
+        currentVelocity = nil
+    end
+
+    if currentAttachment then
+        currentAttachment:Destroy()
+        currentAttachment = nil
+    end
+end
+
+local function enableAntiAfk()
+    if antiAfkConnection then return end
+
+    antiAfkConnection = LocalPlayer.Idled:Connect(function()
+        VirtualUser:CaptureController()
+        VirtualUser:ClickButton2(Vector2.new())
+    end)
+end
+
+local function disableAntiAfk()
+    if antiAfkConnection then
+        antiAfkConnection:Disconnect()
+        antiAfkConnection = nil
+    end
+end
+
+local function getDirection()
+    return (endPosition - startPosition).Unit
+end
+
+local function getStartCFrame()
+    local direction = getDirection()
+    return CFrame.new(startPosition, startPosition + direction)
+end
+
+local function updateSlider(percent)
+    percent = math.clamp(percent, 0, 1)
+
+    driveSpeed = math.floor(minSpeed + ((maxSpeed - minSpeed) * percent))
+    speedLabel.Text = "Speed: " .. tostring(driveSpeed)
+
+    sliderFill.Size = UDim2.new(percent, 0, 1, 0)
+    knob.Position = UDim2.new(percent, -7, 0.5, -7)
+end
+
+-- SLIDER
+local dragging = false
+
+sliderBack.InputBegan:Connect(function(input)
+    if input.UserInputType == Enum.UserInputType.MouseButton1 then
+        dragging = true
+        local percent = (input.Position.X - sliderBack.AbsolutePosition.X) / sliderBack.AbsoluteSize.X
+        updateSlider(percent)
+    end
+end)
+
+knob.InputBegan:Connect(function(input)
+    if input.UserInputType == Enum.UserInputType.MouseButton1 then
+        dragging = true
+    end
+end)
+
+UserInputService.InputEnded:Connect(function(input)
+    if input.UserInputType == Enum.UserInputType.MouseButton1 then
+        dragging = false
+    end
+end)
+
+UserInputService.InputChanged:Connect(function(input)
+    if dragging and input.UserInputType == Enum.UserInputType.MouseMovement then
+        local percent = (input.Position.X - sliderBack.AbsolutePosition.X) / sliderBack.AbsoluteSize.X
+        updateSlider(percent)
+    end
+end)
+
+-- DRIVE LOOP
+local function driveLoop()
+    local car, seat = getCar()
+
+    if not car or not seat then
+        enabled = false
+        button.Text = "OFF"
+        button.BackgroundColor3 = Color3.fromRGB(120, 45, 45)
+        disableAntiAfk()
+        return
+    end
+
+    local rootPart = car.PrimaryPart or seat
+    car.PrimaryPart = rootPart
+
+    cleanupDrive()
+
+    local direction = getDirection()
+
+    car:PivotTo(getStartCFrame())
+    task.wait(0.2)
+
+    currentAttachment = Instance.new("Attachment")
+    currentAttachment.Name = "SmoothDriveAttachment"
+    currentAttachment.Parent = rootPart
+
+    currentVelocity = Instance.new("LinearVelocity")
+    currentVelocity.Name = "SmoothMapDriveVelocity"
+    currentVelocity.Attachment0 = currentAttachment
+    currentVelocity.MaxForce = math.huge
+    currentVelocity.RelativeTo = Enum.ActuatorRelativeTo.World
+    currentVelocity.VectorVelocity = direction * driveSpeed
+    currentVelocity.Parent = rootPart
+
+    pcall(function()
+        seat.ThrottleFloat = 1
+    end)
+
+    driveConnection = RunService.Heartbeat:Connect(function()
+        if not enabled then
+            cleanupDrive()
+            stopCar(car)
+            disableAntiAfk()
+
+            pcall(function()
+                seat.ThrottleFloat = 0
+            end)
+
+            return
+        end
+
+        if not car or not car.Parent or not rootPart or not rootPart.Parent then
+            cleanupDrive()
+            disableAntiAfk()
+            return
+        end
+
+        local distanceToEnd = (rootPart.Position - endPosition).Magnitude
+
+        if distanceToEnd <= resetDistance then
+            car:PivotTo(getStartCFrame())
+
+            for _, part in ipairs(car:GetDescendants()) do
+                if part:IsA("BasePart") then
+                    part.AssemblyLinearVelocity = direction * driveSpeed
+                    part.AssemblyAngularVelocity = Vector3.zero
+                end
+            end
+        end
+
+        if currentVelocity then
+            currentVelocity.VectorVelocity = direction * driveSpeed
+        end
+    end)
+end
+
+-- TOGGLE
+button.MouseButton1Click:Connect(function()
+    enabled = not enabled
+
+    if enabled then
+        button.Text = "ON"
+        button.BackgroundColor3 = Color3.fromRGB(45, 120, 65)
+
+        enableAntiAfk()
+        driveLoop()
+    else
+        button.Text = "OFF"
+        button.BackgroundColor3 = Color3.fromRGB(120, 45, 45)
+
+        local car = select(1, getCar())
+        cleanupDrive()
+        disableAntiAfk()
+
+        if car then
+            stopCar(car)
+        end
+    end
+end)
