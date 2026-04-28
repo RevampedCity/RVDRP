@@ -1,119 +1,139 @@
+-- SHAMAN LIB
+local Library = loadstring(game:HttpGet("https://raw.githubusercontent.com/RevampedCity/Shaman-Library/refs/heads/main/Library"))()
+local Window = Library:Window({ Text = "Shaman Farm" })
+
 local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
-local UserInputService = game:GetService("UserInputService")
 local VirtualUser = game:GetService("VirtualUser")
 
 local LocalPlayer = Players.LocalPlayer
 
--- POINTS
+local MainTab = Window:Tab({ Text = "Main" })
+local DriveSection = MainTab:Section({ Text = "Air Drive" })
+local FarmSection = MainTab:Section({ Text = "Money Farm" })
+
 local startPosition = Vector3.new(-19125, 1276, 14726)
 local endPosition = Vector3.new(709, 868, -6331)
 
--- SETTINGS
 local driveSpeed = 220
-local minSpeed = 80
-local maxSpeed = 880
-local resetDistance = 80
-local enabled = false
+local enabledDrive = false
+local enabledFarm = false
+local farmToken = 0
+
+local COOLDOWN = 60
+local cooldowns = {}
 
 local driveConnection
 local currentVelocity
 local currentAttachment
 local antiAfkConnection
 
--- GUI
-local gui = Instance.new("ScreenGui")
-gui.Name = "SmoothCarDriveGui"
-gui.ResetOnSpawn = false
-gui.Parent = LocalPlayer:WaitForChild("PlayerGui")
+local function getCharacter()
+    return LocalPlayer.Character or LocalPlayer.CharacterAdded:Wait()
+end
 
-local frame = Instance.new("Frame")
-frame.Size = UDim2.new(0, 230, 0, 130)
-frame.Position = UDim2.new(0, 20, 0, 200)
-frame.BackgroundColor3 = Color3.fromRGB(35, 35, 35)
-frame.BorderSizePixel = 0
-frame.Parent = gui
+local function getPosition(obj)
+    if not obj then return nil end
 
-local corner = Instance.new("UICorner")
-corner.CornerRadius = UDim.new(0, 10)
-corner.Parent = frame
+    if obj:IsA("BasePart") then
+        return obj.Position
+    end
 
-local title = Instance.new("TextLabel")
-title.Size = UDim2.new(1, -20, 0, 28)
-title.Position = UDim2.new(0, 10, 0, 8)
-title.BackgroundTransparency = 1
-title.Text = "Car Drive Loop"
-title.TextColor3 = Color3.fromRGB(240, 240, 240)
-title.TextScaled = true
-title.Font = Enum.Font.GothamBold
-title.Parent = frame
+    if obj:IsA("Model") then
+        return obj:GetPivot().Position
+    end
 
-local button = Instance.new("TextButton")
-button.Size = UDim2.new(1, -20, 0, 34)
-button.Position = UDim2.new(0, 10, 0, 42)
-button.Text = "OFF"
-button.TextScaled = true
-button.Font = Enum.Font.GothamBold
-button.BackgroundColor3 = Color3.fromRGB(120, 45, 45)
-button.TextColor3 = Color3.fromRGB(255, 255, 255)
-button.BorderSizePixel = 0
-button.Parent = frame
+    if obj:IsA("Attachment") then
+        return obj.WorldPosition
+    end
 
-local buttonCorner = Instance.new("UICorner")
-buttonCorner.CornerRadius = UDim.new(0, 8)
-buttonCorner.Parent = button
+    if obj.Parent then
+        return getPosition(obj.Parent)
+    end
 
-local speedLabel = Instance.new("TextLabel")
-speedLabel.Size = UDim2.new(1, -20, 0, 20)
-speedLabel.Position = UDim2.new(0, 10, 0, 82)
-speedLabel.BackgroundTransparency = 1
-speedLabel.Text = "Speed: " .. tostring(driveSpeed)
-speedLabel.TextColor3 = Color3.fromRGB(210, 210, 210)
-speedLabel.TextScaled = true
-speedLabel.Font = Enum.Font.Gotham
-speedLabel.Parent = frame
+    return nil
+end
 
-local sliderBack = Instance.new("Frame")
-sliderBack.Size = UDim2.new(1, -20, 0, 8)
-sliderBack.Position = UDim2.new(0, 10, 0, 110)
-sliderBack.BackgroundColor3 = Color3.fromRGB(65, 65, 65)
-sliderBack.BorderSizePixel = 0
-sliderBack.Parent = frame
+local function isInsideRobberies(obj)
+    local robberies = workspace:FindFirstChild("Systems")
+        and workspace.Systems:FindFirstChild("Robberies")
 
-local sliderBackCorner = Instance.new("UICorner")
-sliderBackCorner.CornerRadius = UDim.new(1, 0)
-sliderBackCorner.Parent = sliderBack
+    local current = obj
+    while current do
+        if current == robberies then
+            return true
+        end
+        current = current.Parent
+    end
 
-local sliderFill = Instance.new("Frame")
-sliderFill.Size = UDim2.new((driveSpeed - minSpeed) / (maxSpeed - minSpeed), 0, 1, 0)
-sliderFill.BackgroundColor3 = Color3.fromRGB(120, 120, 120)
-sliderFill.BorderSizePixel = 0
-sliderFill.Parent = sliderBack
+    return false
+end
 
-local sliderFillCorner = Instance.new("UICorner")
-sliderFillCorner.CornerRadius = UDim.new(1, 0)
-sliderFillCorner.Parent = sliderFill
+local function getRobberyPrompts()
+    local rob = workspace:FindFirstChild("Systems")
+        and workspace.Systems:FindFirstChild("Robberies")
 
-local knob = Instance.new("Frame")
-knob.Size = UDim2.new(0, 14, 0, 14)
-knob.Position = UDim2.new((driveSpeed - minSpeed) / (maxSpeed - minSpeed), -7, 0.5, -7)
-knob.BackgroundColor3 = Color3.fromRGB(230, 230, 230)
-knob.BorderSizePixel = 0
-knob.Parent = sliderBack
+    if not rob then return {} end
 
-local knobCorner = Instance.new("UICorner")
-knobCorner.CornerRadius = UDim.new(1, 0)
-knobCorner.Parent = knob
+    local list = {}
 
--- HELPERS
+    local mcKebab = rob:FindFirstChild("Mc Kebab")
+    if mcKebab then
+        local prompt = mcKebab:FindFirstChildWhichIsA("ProximityPrompt", true)
+        if prompt then table.insert(list, prompt) end
+    end
+
+    local lovies = rob:FindFirstChild("Lovies")
+    if lovies then
+        local prompt = lovies:FindFirstChildWhichIsA("ProximityPrompt", true)
+        if prompt then table.insert(list, prompt) end
+    end
+
+    for i = 1, 5 do
+        local atm = rob:FindFirstChild("ATM " .. i)
+        if atm then
+            local prompt = atm:FindFirstChildWhichIsA("ProximityPrompt", true)
+            if prompt then table.insert(list, prompt) end
+        end
+    end
+
+    return list
+end
+
+local function teleportToPosition(pos, token)
+    if token and (not enabledFarm or token ~= farmToken) then return false end
+    if not pos then return false end
+
+    local char = getCharacter()
+    local hum = char:FindFirstChild("Humanoid")
+    local hrp = char:FindFirstChild("HumanoidRootPart")
+
+    if not hum or not hrp then return false end
+
+    hum:ChangeState(0)
+
+    repeat
+        task.wait()
+        if token and (not enabledFarm or token ~= farmToken) then return false end
+    until not LocalPlayer:GetAttribute("LastACPos")
+
+    if token and (not enabledFarm or token ~= farmToken) then return false end
+
+    hrp.CFrame = CFrame.new(pos)
+    return true
+end
+
+local function teleportToPrompt(prompt, token)
+    local pos = getPosition(prompt)
+    if not pos then return false end
+    return teleportToPosition(pos + Vector3.new(0, 3, 0), token)
+end
+
 local function getVehicleSeat()
     local char = LocalPlayer.Character
-    if not char then return nil end
+    local hum = char and char:FindFirstChildWhichIsA("Humanoid")
+    local seat = hum and hum.SeatPart
 
-    local humanoid = char:FindFirstChildWhichIsA("Humanoid")
-    if not humanoid then return nil end
-
-    local seat = humanoid.SeatPart
     if seat and seat:IsA("VehicleSeat") then
         return seat
     end
@@ -123,21 +143,15 @@ end
 
 local function getCar()
     local seat = getVehicleSeat()
-    if not seat then
-        warn("Get in a car first.")
-        return nil, nil
-    end
+    if not seat then return nil, nil end
 
     local car = seat:FindFirstAncestorOfClass("Model")
-    if not car then
-        warn("Could not find car model.")
-        return nil, nil
-    end
-
     return car, seat
 end
 
 local function stopCar(car)
+    if not car then return end
+
     for _, part in ipairs(car:GetDescendants()) do
         if part:IsA("BasePart") then
             part.AssemblyLinearVelocity = Vector3.zero
@@ -188,55 +202,10 @@ local function getStartCFrame()
     return CFrame.new(startPosition, startPosition + direction)
 end
 
-local function updateSlider(percent)
-    percent = math.clamp(percent, 0, 1)
-
-    driveSpeed = math.floor(minSpeed + ((maxSpeed - minSpeed) * percent))
-    speedLabel.Text = "Speed: " .. tostring(driveSpeed)
-
-    sliderFill.Size = UDim2.new(percent, 0, 1, 0)
-    knob.Position = UDim2.new(percent, -7, 0.5, -7)
-end
-
--- SLIDER
-local dragging = false
-
-sliderBack.InputBegan:Connect(function(input)
-    if input.UserInputType == Enum.UserInputType.MouseButton1 then
-        dragging = true
-        local percent = (input.Position.X - sliderBack.AbsolutePosition.X) / sliderBack.AbsoluteSize.X
-        updateSlider(percent)
-    end
-end)
-
-knob.InputBegan:Connect(function(input)
-    if input.UserInputType == Enum.UserInputType.MouseButton1 then
-        dragging = true
-    end
-end)
-
-UserInputService.InputEnded:Connect(function(input)
-    if input.UserInputType == Enum.UserInputType.MouseButton1 then
-        dragging = false
-    end
-end)
-
-UserInputService.InputChanged:Connect(function(input)
-    if dragging and input.UserInputType == Enum.UserInputType.MouseMovement then
-        local percent = (input.Position.X - sliderBack.AbsolutePosition.X) / sliderBack.AbsoluteSize.X
-        updateSlider(percent)
-    end
-end)
-
--- DRIVE LOOP
-local function driveLoop()
+local function startDrive()
     local car, seat = getCar()
-
     if not car or not seat then
-        enabled = false
-        button.Text = "OFF"
-        button.BackgroundColor3 = Color3.fromRGB(120, 45, 45)
-        disableAntiAfk()
+        warn("Get in a car first.")
         return
     end
 
@@ -267,7 +236,7 @@ local function driveLoop()
     end)
 
     driveConnection = RunService.Heartbeat:Connect(function()
-        if not enabled then
+        if not enabledDrive then
             cleanupDrive()
             stopCar(car)
             disableAntiAfk()
@@ -287,7 +256,7 @@ local function driveLoop()
 
         local distanceToEnd = (rootPart.Position - endPosition).Magnitude
 
-        if distanceToEnd <= resetDistance then
+        if distanceToEnd <= 80 then
             car:PivotTo(getStartCFrame())
 
             for _, part in ipairs(car:GetDescendants()) do
@@ -304,26 +273,183 @@ local function driveLoop()
     end)
 end
 
--- TOGGLE
-button.MouseButton1Click:Connect(function()
-    enabled = not enabled
+local function firePrompt(prompt, token)
+    if token and (not enabledFarm or token ~= farmToken) then return false end
+    if not prompt or not prompt.Parent then return false end
 
-    if enabled then
-        button.Text = "ON"
-        button.BackgroundColor3 = Color3.fromRGB(45, 120, 65)
+    prompt.HoldDuration = 0
 
-        enableAntiAfk()
-        driveLoop()
-    else
-        button.Text = "OFF"
-        button.BackgroundColor3 = Color3.fromRGB(120, 45, 45)
+    pcall(function()
+        fireproximityprompt(prompt)
+    end)
 
-        local car = select(1, getCar())
-        cleanupDrive()
-        disableAntiAfk()
+    return true
+end
+
+local function isMoneyPrompt(prompt, origin, ignorePrompt)
+    if not prompt or not prompt.Parent then return false end
+    if prompt == ignorePrompt then return false end
+    if isInsideRobberies(prompt) then return false end
+
+    local pos = getPosition(prompt)
+    if not pos then return false end
+
+    return (pos - origin).Magnitude <= 65
+end
+
+local function waitForMoneyDrop(origin, ignorePrompt, token)
+    local started = tick()
+
+    while enabledFarm and token == farmToken and tick() - started < 1.8 do
+        for _, prompt in ipairs(workspace:GetDescendants()) do
+            if not enabledFarm or token ~= farmToken then return false end
+
+            if prompt:IsA("ProximityPrompt") and isMoneyPrompt(prompt, origin, ignorePrompt) then
+                return true
+            end
+        end
+
+        task.wait(0.1)
+    end
+
+    return false
+end
+
+local function collectAllMoney(origin, ignorePrompt, token)
+    local gotAny = false
+    local lastFound = tick()
+
+    while enabledFarm and token == farmToken do
+        local foundThisPass = false
+
+        for _, prompt in ipairs(workspace:GetDescendants()) do
+            if not enabledFarm or token ~= farmToken then return gotAny end
+
+            if prompt:IsA("ProximityPrompt") and isMoneyPrompt(prompt, origin, ignorePrompt) then
+                local pos = getPosition(prompt)
+
+                if pos then
+                    teleportToPosition(pos + Vector3.new(0, 3, 0), token)
+                    if not enabledFarm or token ~= farmToken then return gotAny end
+
+                    task.wait(0.12)
+                    firePrompt(prompt, token)
+
+                    foundThisPass = true
+                    gotAny = true
+                    lastFound = tick()
+
+                    task.wait(0.18)
+                end
+            end
+        end
+
+        if not foundThisPass and tick() - lastFound > 0.7 then
+            break
+        end
+
+        task.wait(0.1)
+    end
+
+    return gotAny
+end
+
+local function farmLoop(token)
+    while enabledFarm and token == farmToken do
+        local car, seat = getCar()
 
         if car then
             stopCar(car)
         end
+
+        local prompts = getRobberyPrompts()
+
+        for _, robberyPrompt in ipairs(prompts) do
+            if not enabledFarm or token ~= farmToken then return end
+            if not robberyPrompt or not robberyPrompt.Parent then continue end
+
+            local origin = getPosition(robberyPrompt)
+            if not origin then continue end
+
+            local last = cooldowns[robberyPrompt]
+            if last and tick() - last < COOLDOWN then
+                continue
+            end
+
+            local teleported = teleportToPrompt(robberyPrompt, token)
+            if not teleported then return end
+
+            task.wait(0.25)
+            if not enabledFarm or token ~= farmToken then return end
+
+            firePrompt(robberyPrompt, token)
+
+            local dropped = waitForMoneyDrop(origin, robberyPrompt, token)
+
+            if not dropped then
+                continue
+            end
+
+            local gotMoney = collectAllMoney(origin, robberyPrompt, token)
+
+            if gotMoney then
+                cooldowns[robberyPrompt] = tick()
+            end
+        end
+
+        if enabledFarm and token == farmToken and seat and seat.Parent then
+            local seatPos = getPosition(seat)
+            if seatPos then
+                teleportToPosition(seatPos + Vector3.new(0, 3, 0), token)
+            end
+        end
+
+        task.wait(0.5)
     end
-end)
+end
+
+DriveSection:Toggle({
+    Text = "Air Drive",
+    Default = false,
+    Callback = function(state)
+        enabledDrive = state
+
+        if state then
+            enableAntiAfk()
+            startDrive()
+        else
+            cleanupDrive()
+            disableAntiAfk()
+
+            local car = select(1, getCar())
+            if car then
+                stopCar(car)
+            end
+        end
+    end
+})
+
+DriveSection:Slider({
+    Text = "Speed",
+    Default = 220,
+    Minimum = 80,
+    Maximum = 880,
+    Callback = function(value)
+        driveSpeed = value
+    end
+})
+
+FarmSection:Toggle({
+    Text = "ATM + Gas Farm",
+    Default = false,
+    Callback = function(state)
+        enabledFarm = state
+        farmToken += 1
+
+        if state then
+            task.spawn(function()
+                farmLoop(farmToken)
+            end)
+        end
+    end
+})
