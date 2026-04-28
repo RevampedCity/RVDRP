@@ -6,24 +6,31 @@ local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
 local VirtualUser = game:GetService("VirtualUser")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local VIM = game:GetService("VirtualInputManager")
 
 local LocalPlayer = Players.LocalPlayer
 
 local MainTab = Window:Tab({ Text = "Main" })
-local ComboSection = MainTab:Section({ Text = "Combo Farm" })
+local ComboSection = MainTab:Section({ Text = "Small Stores + Drive" })
+local BankSection = MainTab:Section({ Text = "Bank Farm", Side = "Right" })
 
--- POINTS
+-- =========================
+-- SETTINGS
+-- =========================
 local startPosition = Vector3.new(-19125, 1276, 14726)
 local endPosition = Vector3.new(709, 868, -6331)
 
--- SETTINGS
 local driveSpeed = 220
 local driveDuration = 30
-local COOLDOWN = 60
+
+local comboToken = 0
+local bankToken = 0
 
 local comboEnabled = false
-local comboToken = 0
-local cooldowns = {}
+local bankEnabled = false
+
+local storeCooldown = 60
+local storeCooldowns = {}
 
 local driveConnection
 local currentVelocity
@@ -33,61 +40,33 @@ local antiAfkConnection
 local savedCar
 local savedSeat
 
+local RobLocations = {
+    {Name = "Gas Station", CFrame = CFrame.new(-8, -6, -4389)},
+    {Name = "ATM 1", CFrame = CFrame.new(-1258, -6, -4507)},
+    {Name = "Hospital ATM", CFrame = CFrame.new(-217, -6, -3515)},
+    {Name = "McDonalds", CFrame = CFrame.new(-31, -6, -2902)},
+    {Name = "Nowhere ATM", CFrame = CFrame.new(646, -7, -5350)}
+}
+
+local SELL_CFRAME = CFrame.new(-4387, -7, -2324)
+
 -- =========================
--- BASIC HELPERS
+-- HELPERS
 -- =========================
-local function getCharacter()
+local function getChar()
     return LocalPlayer.Character or LocalPlayer.CharacterAdded:Wait()
 end
 
-local function getHumanoid()
-    return getCharacter():WaitForChild("Humanoid")
+local function getHum()
+    return getChar():WaitForChild("Humanoid")
 end
 
 local function getHRP()
-    return getCharacter():WaitForChild("HumanoidRootPart")
-end
-
-local function getPosition(obj)
-    if not obj then return nil end
-    if obj:IsA("BasePart") then return obj.Position end
-    if obj:IsA("Model") then return obj:GetPivot().Position end
-    if obj:IsA("Attachment") then return obj.WorldPosition end
-    if obj.Parent then return getPosition(obj.Parent) end
-    return nil
-end
-
-local function teleport(pos, token)
-    if token ~= comboToken then return false end
-
-    local hum = getHumanoid()
-    local hrp = getHRP()
-
-    hum:ChangeState(0)
-
-    repeat
-        task.wait()
-        if token ~= comboToken then return false end
-    until not LocalPlayer:GetAttribute("LastACPos")
-
-    if token ~= comboToken then return false end
-
-    hrp.CFrame = CFrame.new(pos)
-    return true
-end
-
-local function firePrompt(prompt)
-    if not prompt then return end
-
-    pcall(function()
-        prompt.HoldDuration = 0
-        fireproximityprompt(prompt)
-    end)
+    return getChar():WaitForChild("HumanoidRootPart")
 end
 
 local function enableAntiAfk()
     if antiAfkConnection then return end
-
     antiAfkConnection = LocalPlayer.Idled:Connect(function()
         VirtualUser:CaptureController()
         VirtualUser:ClickButton2(Vector2.new())
@@ -101,9 +80,97 @@ local function disableAntiAfk()
     end
 end
 
+local function stopPart(part)
+    if part then
+        part.AssemblyLinearVelocity = Vector3.zero
+        part.AssemblyAngularVelocity = Vector3.zero
+    end
+end
+
+local function stopCar(car)
+    if not car then return end
+
+    for _, part in ipairs(car:GetDescendants()) do
+        if part:IsA("BasePart") then
+            stopPart(part)
+        end
+    end
+end
+
+local function getPosition(obj)
+    if not obj then return nil end
+    if obj:IsA("BasePart") then return obj.Position end
+    if obj:IsA("Model") then return obj:GetPivot().Position end
+    if obj:IsA("Attachment") then return obj.WorldPosition end
+    if obj.Parent then return getPosition(obj.Parent) end
+end
+
+local function playerTP(cf)
+    local hum = getHum()
+    local hrp = getHRP()
+
+    hum.Sit = false
+    task.wait(0.15)
+
+    hum:ChangeState(0)
+    repeat task.wait() until not LocalPlayer:GetAttribute("LastACPos")
+
+    hrp.CFrame = cf
+    stopPart(hrp)
+end
+
+local function holdE(duration)
+    VIM:SendKeyEvent(true, Enum.KeyCode.E, false, game)
+    task.wait(duration)
+    VIM:SendKeyEvent(false, Enum.KeyCode.E, false, game)
+end
+
+local function firePrompt(prompt)
+    if not prompt then return end
+    pcall(function()
+        prompt.HoldDuration = 0
+        fireproximityprompt(prompt)
+    end)
+end
+
 -- =========================
--- VEHICLE SPAWN + SIT
+-- CAR SPAWN + AIR DRIVE
 -- =========================
+local function getVehicleSeat()
+    local char = LocalPlayer.Character
+    local hum = char and char:FindFirstChildWhichIsA("Humanoid")
+    local seat = hum and hum.SeatPart
+
+    if seat and seat:IsA("VehicleSeat") then
+        return seat
+    end
+end
+
+local function getCurrentCar()
+    local seat = getVehicleSeat()
+    if not seat then return nil, nil end
+
+    local car = seat:FindFirstAncestorOfClass("Model")
+    return car, seat
+end
+
+local function sitInSeat(seat)
+    if not seat or not seat.Parent then return false end
+
+    local hum = getHum()
+    local hrp = getHRP()
+
+    hrp.CFrame = CFrame.new(seat.Position + Vector3.new(0, 4, 0))
+    task.wait(0.3)
+
+    pcall(function()
+        seat:Sit(hum)
+    end)
+
+    task.wait(0.5)
+    return hum.SeatPart == seat
+end
+
 local function spawnTrackhawkOnUser()
     local hrp = getHRP()
     local spawnCFrame = hrp.CFrame * CFrame.new(0, 0, -8)
@@ -115,14 +182,10 @@ local function spawnTrackhawkOnUser()
     }
 
     pcall(function()
-        ReplicatedStorage
-            :WaitForChild("Events")
-            :WaitForChild("Dealership")
-            :WaitForChild("RequestSpawn")
-            :InvokeServer(unpack(args))
+        ReplicatedStorage.Events.Dealership.RequestSpawn:InvokeServer(unpack(args))
     end)
 
-    task.wait(2)
+    task.wait(1.5)
 
     local closestCar
     local closestSeat
@@ -144,48 +207,9 @@ local function spawnTrackhawkOnUser()
     if closestCar and closestSeat then
         savedCar = closestCar
         savedSeat = closestSeat
+        sitInSeat(closestSeat)
         return closestCar, closestSeat
     end
-
-    return nil, nil
-end
-
-local function getVehicleSeat()
-    local char = LocalPlayer.Character
-    local hum = char and char:FindFirstChildWhichIsA("Humanoid")
-    local seat = hum and hum.SeatPart
-
-    if seat and seat:IsA("VehicleSeat") then
-        return seat
-    end
-
-    return nil
-end
-
-local function getCurrentCar()
-    local seat = getVehicleSeat()
-    if not seat then return nil, nil end
-
-    local car = seat:FindFirstAncestorOfClass("Model")
-    return car, seat
-end
-
-local function sitInSeat(seat)
-    if not seat or not seat.Parent then return false end
-
-    local hum = getHumanoid()
-    local hrp = getHRP()
-
-    hrp.CFrame = CFrame.new(seat.Position + Vector3.new(0, 4, 0))
-    task.wait(0.3)
-
-    pcall(function()
-        seat:Sit(hum)
-    end)
-
-    task.wait(0.6)
-
-    return hum.SeatPart == seat
 end
 
 local function ensureCar()
@@ -203,25 +227,7 @@ local function ensureCar()
         end
     end
 
-    car, seat = spawnTrackhawkOnUser()
-
-    if car and seat then
-        sitInSeat(seat)
-        return car, seat
-    end
-
-    return nil, nil
-end
-
-local function stopCar(car)
-    if not car then return end
-
-    for _, part in ipairs(car:GetDescendants()) do
-        if part:IsA("BasePart") then
-            part.AssemblyLinearVelocity = Vector3.zero
-            part.AssemblyAngularVelocity = Vector3.zero
-        end
-    end
+    return spawnTrackhawkOnUser()
 end
 
 local function cleanupDrive()
@@ -241,43 +247,27 @@ local function cleanupDrive()
     end
 end
 
--- =========================
--- AIR DRIVE 30 SECONDS
--- =========================
-local function getDirection()
-    return (endPosition - startPosition).Unit
-end
-
-local function getStartCFrame()
-    local direction = getDirection()
-    return CFrame.new(startPosition, startPosition + direction)
-end
-
 local function runAirDriveFor30(token)
     if token ~= comboToken then return end
 
     local car, seat = ensureCar()
-    if not car or not seat then
-        warn("No car found/spawned.")
-        return
-    end
+    if not car or not seat then return end
 
     local rootPart = car.PrimaryPart or seat
     car.PrimaryPart = rootPart
 
     cleanupDrive()
 
-    local direction = getDirection()
+    local direction = (endPosition - startPosition).Unit
+    local startCFrame = CFrame.new(startPosition, startPosition + direction)
 
-    car:PivotTo(getStartCFrame())
+    car:PivotTo(startCFrame)
     task.wait(0.2)
 
     currentAttachment = Instance.new("Attachment")
-    currentAttachment.Name = "SmoothDriveAttachment"
     currentAttachment.Parent = rootPart
 
     currentVelocity = Instance.new("LinearVelocity")
-    currentVelocity.Name = "SmoothMapDriveVelocity"
     currentVelocity.Attachment0 = currentAttachment
     currentVelocity.MaxForce = math.huge
     currentVelocity.RelativeTo = Enum.ActuatorRelativeTo.World
@@ -294,34 +284,17 @@ local function runAirDriveFor30(token)
         if token ~= comboToken then
             cleanupDrive()
             stopCar(car)
-
-            pcall(function()
-                seat.ThrottleFloat = 0
-            end)
-
-            return
-        end
-
-        if not car or not car.Parent or not rootPart or not rootPart.Parent then
-            cleanupDrive()
             return
         end
 
         if tick() - startTime >= driveDuration then
             cleanupDrive()
             stopCar(car)
-
-            pcall(function()
-                seat.ThrottleFloat = 0
-            end)
-
             return
         end
 
-        local distanceToEnd = (rootPart.Position - endPosition).Magnitude
-
-        if distanceToEnd <= 80 then
-            car:PivotTo(getStartCFrame())
+        if (rootPart.Position - endPosition).Magnitude <= 80 then
+            car:PivotTo(startCFrame)
 
             for _, part in ipairs(car:GetDescendants()) do
                 if part:IsA("BasePart") then
@@ -349,202 +322,227 @@ local function runAirDriveFor30(token)
 end
 
 -- =========================
--- ROBBERY PROMPTS
+-- SMALL STORES FARM
 -- =========================
-local function getRobberyPrompts()
-    local rob = workspace:FindFirstChild("Systems")
-        and workspace.Systems:FindFirstChild("Robberies")
+local function getNearbyPrompt(root, radius)
+    local closest
+    local closestDist = radius or 25
 
-    if not rob then return {} end
+    for _, obj in ipairs(workspace:GetDescendants()) do
+        if obj:IsA("ProximityPrompt") and obj.Enabled then
+            local pos = getPosition(obj)
 
-    local list = {}
-
-    local kebab = rob:FindFirstChild("Mc Kebab")
-    if kebab then
-        local p = kebab:FindFirstChildWhichIsA("ProximityPrompt", true)
-        if p then table.insert(list, p) end
-    end
-
-    local lovies = rob:FindFirstChild("Lovies")
-    if lovies then
-        local p = lovies:FindFirstChildWhichIsA("ProximityPrompt", true)
-        if p then table.insert(list, p) end
-    end
-
-    for i = 1, 5 do
-        local atm = rob:FindFirstChild("ATM " .. i)
-        if atm then
-            local p = atm:FindFirstChildWhichIsA("ProximityPrompt", true)
-            if p then table.insert(list, p) end
-        end
-    end
-
-    return list
-end
-
-local function isInsideRobberies(obj)
-    local rob = workspace:FindFirstChild("Systems")
-        and workspace.Systems:FindFirstChild("Robberies")
-
-    local cur = obj
-    while cur do
-        if cur == rob then return true end
-        cur = cur.Parent
-    end
-
-    return false
-end
-
-local function countNoCash()
-    local gui = LocalPlayer:FindFirstChild("PlayerGui")
-    if not gui then return 0 end
-
-    local count = 0
-
-    for _, v in ipairs(gui:GetDescendants()) do
-        if v:IsA("TextLabel") or v:IsA("TextButton") then
-            if tostring(v.Text):lower():find("no cash left") then
-                count += 1
+            if pos then
+                local dist = (pos - root.Position).Magnitude
+                if dist <= closestDist then
+                    closestDist = dist
+                    closest = obj
+                end
             end
         end
     end
 
-    return count
+    return closest
 end
 
-local function waitForNewNoCash(oldCount, token)
-    local start = tick()
+local function pickupMoneyFast(radius)
+    local root = getHRP()
+    local center = root.Position
+    local gotMoney = false
+    local lastPickup = tick()
 
-    while tick() - start < 1 do
-        if token ~= comboToken then return false end
+    while tick() - lastPickup < 0.8 do
+        local found = false
 
-        if countNoCash() > oldCount then
-            return true
-        end
+        for _, obj in ipairs(workspace:GetDescendants()) do
+            if obj:IsA("ProximityPrompt") and obj.Enabled then
+                local parent = obj.Parent
+                local pos = getPosition(obj)
 
-        task.wait(0.1)
-    end
+                if parent and pos then
+                    local name = parent.Name:lower()
+                    local isCash =
+                        name:find("money")
+                        or name:find("cash")
+                        or name:find("bill")
+                        or name:find("bag")
+                        or name:find("loot")
 
-    return false
-end
+                    if isCash and (pos - center).Magnitude <= radius then
+                        root.CFrame = CFrame.new(pos + Vector3.new(0, 3, 0))
+                        stopPart(root)
+                        task.wait(0.06)
 
-local function isMoneyPrompt(prompt, origin, ignore)
-    if not prompt or not prompt.Parent then return false end
-    if prompt == ignore then return false end
-    if isInsideRobberies(prompt) then return false end
+                        holdE(math.max(obj.HoldDuration + 0.05, 0.25))
 
-    local pos = getPosition(prompt)
-    if not pos then return false end
-
-    return (pos - origin).Magnitude <= 70
-end
-
-local function waitForMoney(origin, ignore, token)
-    local start = tick()
-
-    while tick() - start < 2 do
-        if token ~= comboToken then return false end
-
-        for _, prompt in ipairs(workspace:GetDescendants()) do
-            if prompt:IsA("ProximityPrompt") and isMoneyPrompt(prompt, origin, ignore) then
-                return true
-            end
-        end
-
-        task.wait(0.1)
-    end
-
-    return false
-end
-
-local function collectMoney(origin, ignore, token)
-    local got = false
-    local last = tick()
-
-    while tick() - last < 0.8 do
-        if token ~= comboToken then return got end
-
-        for _, prompt in ipairs(workspace:GetDescendants()) do
-            if prompt:IsA("ProximityPrompt") and isMoneyPrompt(prompt, origin, ignore) then
-                local pos = getPosition(prompt)
-
-                if pos then
-                    teleport(pos + Vector3.new(0, 3, 0), token)
-                    task.wait(0.1)
-                    firePrompt(prompt)
-
-                    got = true
-                    last = tick()
+                        found = true
+                        gotMoney = true
+                        lastPickup = tick()
+                    end
                 end
             end
         end
 
-        task.wait(0.1)
+        if not found then
+            task.wait(0.08)
+        end
     end
 
-    return got
+    return gotMoney
 end
 
--- =========================
--- RUN ALL ROBBERIES ONCE
--- =========================
-local function runRobberiesOnce(token)
-    local prompts = getRobberyPrompts()
+local function runSmallStoresOnce(token)
+    -- car stays where it is; player exits and teleports alone
+    local hum = getHum()
+    hum.Sit = false
+    task.wait(0.2)
 
-    for _, prompt in ipairs(prompts) do
+    for _, loc in ipairs(RobLocations) do
         if token ~= comboToken then return end
-        if not prompt or not prompt.Parent then continue end
 
-        local pos = getPosition(prompt)
-        if not pos then continue end
-
-        local last = cooldowns[prompt]
-        if last and tick() - last < COOLDOWN then
+        local cooldownEnd = storeCooldowns[loc.Name]
+        if cooldownEnd and os.time() < cooldownEnd then
             continue
         end
 
-        local oldNoCash = countNoCash()
+        playerTP(loc.CFrame)
+        task.wait(0.45)
 
-        teleport(pos + Vector3.new(0, 3, 0), token)
-        task.wait(0.2)
+        local root = getHRP()
+        local prompt = getNearbyPrompt(root, 25)
+
+        if not prompt then
+            storeCooldowns[loc.Name] = os.time() + storeCooldown
+            continue
+        end
 
         firePrompt(prompt)
+        holdE(10.5)
+        task.wait(0.3)
 
-        if waitForNewNoCash(oldNoCash, token) then
-            cooldowns[prompt] = tick()
-            continue
+        local gotMoney = pickupMoneyFast(50)
+        storeCooldowns[loc.Name] = os.time() + storeCooldown
+
+        if gotMoney and token == comboToken then
+            playerTP(SELL_CFRAME * CFrame.new(0, 8, 0))
+            task.wait(0.25)
+            playerTP(SELL_CFRAME)
+            task.wait(1.2)
         end
-
-        local dropped = waitForMoney(pos, prompt, token)
-
-        if not dropped then
-            cooldowns[prompt] = tick()
-            continue
-        end
-
-        collectMoney(pos, prompt, token)
-        cooldowns[prompt] = tick()
     end
 end
 
 -- =========================
--- COMBO LOOP
+-- BANK FARM
+-- =========================
+local function bankReady()
+    local cooldown = workspace.Systems.Bank.CooldownTimer
+    return #cooldown:GetChildren() == 0
+end
+
+local function isGreen(part)
+    local c = part.Color
+
+    return math.floor(c.R * 255 + 0.5) == 40
+        and math.floor(c.G * 255 + 0.5) == 127
+        and math.floor(c.B * 255 + 0.5) == 71
+end
+
+local function hackDoor(prompt, part, token)
+    while token == bankToken and bankEnabled and prompt and prompt.Parent do
+        if isGreen(part) then
+            firePrompt(prompt)
+            task.wait(0.6)
+        else
+            task.wait(0.1)
+        end
+    end
+end
+
+local function buyBomb()
+    local args = {
+        workspace.Systems.Criminal.Dealer,
+        "Buy",
+        "Bomb"
+    }
+
+    ReplicatedStorage.Events.Criminal.Dealer:FireServer(unpack(args))
+end
+
+local function collectBankLoot(token)
+    local room = workspace.Systems.Bank.Loot.MainRoom
+
+    for _, v in ipairs(room:GetDescendants()) do
+        if token ~= bankToken or not bankEnabled then return end
+
+        if v:IsA("ProximityPrompt") and v.Name == "CollectLoot" then
+            local pos = getPosition(v)
+            if pos then
+                playerTP(CFrame.new(pos + Vector3.new(0, 3, 0)))
+                task.wait(0.15)
+                firePrompt(v)
+            end
+        end
+    end
+end
+
+local function bankLoop(token)
+    while token == bankToken and bankEnabled do
+        if not bankReady() then
+            task.wait(1)
+            continue
+        end
+
+        local dealer
+        for _, v in ipairs(workspace.Map:GetChildren()) do
+            if v.Name:lower():find("gun dealer") then
+                dealer = v
+                break
+            end
+        end
+
+        if not dealer then return end
+
+        playerTP(dealer:GetPivot() + Vector3.new(0, 2, 0))
+        task.wait(1)
+        buyBomb()
+        task.wait(1.5)
+
+        local vault = workspace.Systems.Bank.VaultDoor
+        playerTP(vault:GetPivot())
+        task.wait(0.4)
+
+        firePrompt(vault.C4Attach.PlaceC4)
+        task.wait(10)
+
+        local mini = workspace.Systems.Bank.Minigames:GetChildren()[2]
+        playerTP(CFrame.new(mini.DirectionPart.Position + Vector3.new(0, 3, 0)))
+        hackDoor(mini.HackDoorPrompt, mini.DirectionPart, token)
+
+        collectBankLoot(token)
+
+        local door = workspace.Systems.Bank.Minigames.Door
+        playerTP(CFrame.new(door.DirectionPart.Position + Vector3.new(0, 3, 0)))
+        hackDoor(door.HackDoorPrompt, door.DirectionPart, token)
+
+        task.wait(2)
+    end
+end
+
+-- =========================
+-- LOOPS
 -- =========================
 local function comboLoop(token)
     enableAntiAfk()
 
-    while token == comboToken do
-        -- 1. Run all ATM/Gas first
-        runRobberiesOnce(token)
+    while token == comboToken and comboEnabled do
+        runSmallStoresOnce(token)
 
-        if token ~= comboToken then break end
+        if token ~= comboToken or not comboEnabled then break end
 
-        -- 2. Then do car for 30 seconds
         runAirDriveFor30(token)
 
-        if token ~= comboToken then break end
-
-        task.wait(0.5)
+        task.wait(0.25)
     end
 
     cleanupDrive()
@@ -559,10 +557,11 @@ end
 -- SHAMAN UI
 -- =========================
 ComboSection:Toggle({
-    Text = "ATM/Gas + Air Drive Loop",
+    Text = "Small Stores + Air Drive",
     Default = false,
     Callback = function(state)
         comboToken += 1
+        comboEnabled = state
 
         if state then
             task.spawn(function()
@@ -586,5 +585,20 @@ ComboSection:Slider({
     Maximum = 880,
     Callback = function(value)
         driveSpeed = value
+    end
+})
+
+BankSection:Toggle({
+    Text = "Bank Farm",
+    Default = false,
+    Callback = function(state)
+        bankToken += 1
+        bankEnabled = state
+
+        if state then
+            task.spawn(function()
+                bankLoop(bankToken)
+            end)
+        end
     end
 })
